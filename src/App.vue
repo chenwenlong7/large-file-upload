@@ -42,22 +42,124 @@
   </div>
 </template>
 <script setup>
-// import { ref } from 'vue'
-// let percentage = ref(0)
-// /**
-//  * @description: 文件上传 Change 事件
-//  * @param {*}
-//  * @return {*}
-//  */
-// const handleFileChange = async (file) => {
-// }
+import { postUploadFile } from "@/api/api.js";
+import { ElMessage } from "element-plus";
+import { ref } from "vue";
+import SparkMD5 from "spark-md5";
+let percentage = ref(0);
+
+const chunkSize = 5 * 1024 * 1024;
+
+/**
+ * @description: 创建文件分片
+ * @param {*}
+ * @return {*}
+ */
+const createChunkList = (file, chunkSize) => {
+  const fileChunkList = [];
+  let cur = 0;
+  while (cur < file.size) {
+    fileChunkList.push(file.slice(cur, cur + chunkSize));
+    cur += chunkSize;
+  }
+  return fileChunkList;
+};
+/**
+ * @description: 生成文件Hash
+ * @param {*}
+ * @return {*}
+ */
+const createMD5 = (fileChunkList) => {
+  return new Promise((resolve, reject) => {
+    // const slice =
+    //   File.prototype.slice ||
+    //   File.prototype.mozSlice ||
+    //   File.prototype.webkitSlice;
+    const chunks = fileChunkList.length;
+    let currentChunk = 0;
+    let spark = new SparkMD5.ArrayBuffer();
+    let fileReader = new FileReader();
+    // 读取文件切片
+    fileReader.onload = function (e) {
+      spark.append(e.target.result);
+      currentChunk++;
+      if (currentChunk < chunks) {
+        loadChunk();
+      } else {
+        // 读取切片，返回最终文件的Hash值
+        resolve(spark.end());
+      }
+    };
+
+    fileReader.onerror = function (e) {
+      reject(e);
+    };
+
+    function loadChunk() {
+      fileReader.readAsArrayBuffer(fileChunkList[currentChunk]);
+    }
+
+    loadChunk();
+  });
+};
+/**
+ * @description: 文件上传 Change 事件
+ * @param {*}
+ * @return {*}
+ */
+let currentFile = ref(null);
+
+const handleFileChange = async (file) => {
+  if (!file) return;
+  currentFile.value = file;
+};
 // /**
 //  * @description: 文件上传 Click 事件
 //  * @param {*}
 //  * @return {*}
 //  */
-// const handleUploadFile = async () => {
-// }
+let chunkFormData = ref([]);
+let fileHash = ref(null);
+const handleUploadFile = async () => {
+  if (!currentFile.value) {
+    ElMessage.warning("请选择文件");
+    return;
+  }
+  // 文件分片
+  let fileChunkList = createChunkList(currentFile.value.raw, chunkSize);
+  fileHash.value = await createMD5(currentFile.value.raw, chunkSize);
+
+  let chunkList = fileChunkList.map((file, index) => {
+    return {
+      file: file,
+      chunkHash: fileHash.value + "-" + index,
+      fileHash: fileHash.value,
+    };
+  });
+  chunkFormData.value = chunkList.map((chunk) => {
+    let formData = new FormData();
+    formData.append("chunk", chunk.file);
+    formData.append("chunkHash", chunk.chunkHash);
+    formData.append("fileHash", chunk.fileHash);
+    return {
+      formData: formData,
+    };
+  });
+
+  Promise.all(
+    chunkFormData.value.map((data) => {
+      return new Promise((resolve, reject) => {
+        postUploadFile(data.formData)
+          .then((data) => {
+            resolve(data);
+          })
+          .catch((err) => {
+            reject(err);
+          });
+      });
+    })
+  );
+};
 // /**
 //  * @description: 暂停上传 Click 事件
 //  * @param {*}
